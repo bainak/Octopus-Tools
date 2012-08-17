@@ -1,7 +1,10 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Text;
+using System.Threading;
 using OctopusTools.Client;
 using OctopusTools.Infrastructure;
 using OctopusTools.Model;
@@ -36,6 +39,9 @@ namespace OctopusTools.Commands
         public TimeSpan DeploymentStatusCheckSleepCycle { get; set; }
         public IDictionary<string, string> PackageVersionNumberOverrides { get; set; }
 
+        public bool Wait { get; set; }
+        public TimeSpan? Delay { get; set; }
+        
         public override OptionSet Options
         {
             get
@@ -53,6 +59,10 @@ namespace OctopusTools.Commands
                 options.Add("waitfordeployment", "Whether to wait synchronously for deployment to finish.", v => WaitForDeployment = true );
                 options.Add("deploymenttimeout=", "[Optional] Specifies maximum time (timespan format) that deployment can take (default 00:10:00)", v => DeploymentTimeout = TimeSpan.Parse(v));
                 options.Add("deploymentchecksleepcycle=", "[Optional] Specifies how much time (timespan format) should elapse between deployment status checks (default 00:00:10)", v => DeploymentStatusCheckSleepCycle = TimeSpan.Parse(v));
+
+                options.Add("wait", "[Optional] Cause the command to wait the delay time before executing (flag, default false).", v => Wait = true);
+                options.Add("delay=", "[Optional] Specifies time (timespan format) to delay execution, otherwise, no delay.", v => Delay = TimeSpan.Parse(v));
+
                 return options;
             }
         }
@@ -105,6 +115,17 @@ namespace OctopusTools.Commands
         public override void Execute()
         {
             if (string.IsNullOrWhiteSpace(ProjectName)) throw new CommandException("Please specify a project name using the parameter: --project=XYZ");
+
+            if (Delay.HasValue)
+            {
+                if (!Wait)
+                {
+                    Fork();
+                    return;
+                }
+                Log.Debug(string.Format("Waiting {0} to create release ...", Delay.Value));
+                Thread.Sleep(Delay.Value);
+            }
 
             Log.Debug("Finding project: " + ProjectName);
             var project = Session.GetProject(ProjectName);
@@ -162,6 +183,27 @@ namespace OctopusTools.Commands
                 }
             }
 
+        }
+
+        public void Fork()
+        {
+            string args = string.Join(" ", Environment.GetCommandLineArgs().Skip(1));
+            args += " --wait";
+
+            var process = new Process();
+            process.StartInfo = new ProcessStartInfo
+            {
+                UseShellExecute = true,                 
+                FileName = Process.GetCurrentProcess().MainModule.FileName, 
+                Arguments = args
+            };
+
+            var success = process.Start();
+            
+            if (success)
+                Log.InfoFormat("Successfully scheduled create release command.");
+            else
+                Log.InfoFormat("Failed scheduled create release command.");
         }
 
         IEnumerable<string> RequestDeployments(Release release, IEnumerable<DeploymentEnvironment> environments)
