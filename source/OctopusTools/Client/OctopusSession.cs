@@ -2,7 +2,9 @@
 using System.Collections.Generic;
 using System.IO;
 using System.Net;
+using System.Web;
 using Newtonsoft.Json;
+using Newtonsoft.Json.Converters;
 using OctopusTools.Infrastructure;
 using OctopusTools.Model;
 using log4net;
@@ -16,6 +18,7 @@ namespace OctopusTools.Client
         readonly ICredentials credentials;
         readonly string apiKey;
         readonly ILog log;
+        readonly JsonSerializerSettings serializerSettings;
 
         public OctopusSession(Uri serverBaseUri, ICredentials credentials, string apiKey, ILog log)
         {
@@ -23,6 +26,9 @@ namespace OctopusTools.Client
             this.credentials = credentials;
             this.apiKey = apiKey;
             this.log = log;
+
+            serializerSettings = new JsonSerializerSettings();
+            serializerSettings.Converters.Add(new IsoDateTimeConverter());
 
             rootDocument = new Lazy<RootDocument>(EstablishSession);
         }
@@ -42,9 +48,19 @@ namespace OctopusTools.Client
             return Get<IList<TResource>>(path);
         }
 
+        public IList<TResource> List<TResource>(string path, QueryString queryString)
+        {
+            return Get<IList<TResource>>(path, queryString);
+        }
+
         public TResource Get<TResource>(string path)
         {
-            var uri = QualifyUri(path);
+            return Get<TResource>(path, null);
+        }
+
+        public TResource Get<TResource>(string path, QueryString queryString)
+        {
+            var uri = QualifyUri(path, queryString);
 
             var request = CreateWebRequest("GET", uri);
 
@@ -61,8 +77,7 @@ namespace OctopusTools.Client
         public TResource Create<TResource>(string path, TResource resource)
         {
             var uri = QualifyUri(path);
-
-            var postData = JsonConvert.SerializeObject(resource, Formatting.Indented);
+            var postData = JsonConvert.SerializeObject(resource, Formatting.Indented, serializerSettings);
 
             var request = CreateWebRequest("POST", uri);
             request.ContentType = "application/json";
@@ -71,6 +86,11 @@ namespace OctopusTools.Client
             using (var response = ReadResponse(request))
             {
                 var location = response.Headers.Get("Location");
+                if (location == null)
+                {
+                    throw new Exception("Unexpected response: " + new StreamReader(response.GetResponseStream()).ReadToEnd());
+                }
+
                 return Get<TResource>(location);
             }
         }
@@ -91,8 +111,29 @@ namespace OctopusTools.Client
             return Get<TResource>(uri.AbsolutePath);
         }
 
-        Uri QualifyUri(string path)
+        public void Delete<TResource>(string path)
         {
+            var uri = QualifyUri(path);
+
+            var request = CreateWebRequest("POST", uri);
+            request.ContentLength = 0;
+            request.Headers["X-HTTP-Method-Override"] = "DELETE";
+
+            using (ReadResponse(request)) { }
+        }
+
+        Uri QualifyUri(string path, QueryString queryString = null)
+        {
+            if (queryString != null && queryString.Count > 0)
+            {
+                var isFirstParam = !path.Contains("?");
+                foreach (var pair in queryString)
+                {
+                    path += (isFirstParam ? "?" : "&") + pair.Key + "=" + HttpUtility.UrlEncode((pair.Value ?? string.Empty).ToString());
+                    isFirstParam = false;
+                }
+            }
+
             return serverBaseUri.EnsureEndsWith(path);
         }
 
@@ -152,9 +193,16 @@ namespace OctopusTools.Client
                     {
                         var details = reader.ReadToEnd();
 
-                        if (!string.IsNullOrWhiteSpace(details))
+                        var message = wex.Message + " " + details;
+                        var header = wex.Response.Headers["X-Error"];
+                        if (header != null)
                         {
-                            throw new Exception(wex.Message + " " + details);
+                            message = header + " " + details;
+                        }
+
+                        if (!string.IsNullOrWhiteSpace(message))
+                        {
+                            throw new Exception(message);
                         }
                     }
                 }
