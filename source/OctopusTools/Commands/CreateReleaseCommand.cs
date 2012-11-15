@@ -205,19 +205,5 @@ namespace OctopusTools.Commands
             else
                 Log.InfoFormat("Failed scheduled create release command.");
         }
-
-        IEnumerable<string> RequestDeployments(Release release, IEnumerable<DeploymentEnvironment> environments)
-        {
-            var linksToDeploymentTasks = new List<string>();
-            foreach (var environment in environments)
-            {
-                var deployment = Session.DeployRelease(release, environment, Force);
-                var linkToTask = deployment.Link("Task");
-                linksToDeploymentTasks.Add(linkToTask);
-
-                Log.InfoFormat("Successfully scheduled release '{0}' for deployment to environment '{1}'" + deployment.Name, release.Version, environment.Name);
-            }
-            return linksToDeploymentTasks;
-        }
     }
 }
